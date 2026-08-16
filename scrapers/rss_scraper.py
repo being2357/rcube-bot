@@ -1,43 +1,86 @@
-"""
-Generic RSS/Atom feed scraper.
-
-Works against any feed listed in config.RSS_SOURCES. Filters entries by
-KEYWORDS so only aerospace / internship / hackathon / competition-relevant
-items pass through.
-"""
-
 import feedparser
-from config import RSS_SOURCES, KEYWORDS
+import requests
+from datetime import datetime
+import logging
 
+logger = logging.getLogger(__name__)
 
-def _is_relevant(text: str) -> bool:
-    text = (text or "").lower()
-    return any(kw.lower() in text for kw in KEYWORDS)
-
-
-def fetch_rss_events():
-    """Returns a list of dicts: source, title, url, summary."""
-    results = []
-    for src in RSS_SOURCES:
+def scrape_rss(url):
+    """
+    Scrape an RSS feed and return list of events.
+    This is the main function called by the aggregator.
+    """
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+    }
+    
+    try:
+        # Try to fetch with requests first (better headers)
         try:
-            feed = feedparser.parse(src["url"])
-        except Exception as e:
-            print(f"[rss_scraper] Failed to fetch {src['name']}: {e}")
-            continue
+            response = requests.get(url, headers=headers, timeout=10)
+            feed = feedparser.parse(response.content)
+        except:
+            # Fallback to direct feedparser
+            feed = feedparser.parse(url)
+        
+        events = []
+        
+        for entry in feed.entries[:10]:  # Get latest 10 entries
+            # Get description
+            description = ''
+            if hasattr(entry, 'description'):
+                description = entry.description
+            elif hasattr(entry, 'summary'):
+                description = entry.summary
+            elif hasattr(entry, 'content'):
+                if isinstance(entry.content, list) and len(entry.content) > 0:
+                    description = entry.content[0].get('value', '')
+            
+            # Clean description (remove HTML tags)
+            if description:
+                import re
+                description = re.sub(r'<[^>]+>', ' ', description)
+                description = ' '.join(description.split())[:300]  # Limit length
+            
+            # Get date
+            pub_date = ''
+            if hasattr(entry, 'published'):
+                pub_date = entry.published
+            elif hasattr(entry, 'updated'):
+                pub_date = entry.updated
+            elif hasattr(entry, 'date'):
+                pub_date = str(entry.date)
+            
+            # Get link
+            link = ''
+            if hasattr(entry, 'link'):
+                link = entry.link
+            
+            events.append({
+                'title': entry.get('title', 'Untitled').strip(),
+                'description': description,
+                'link': link,
+                'date': pub_date,
+                'source': 'RSS'
+            })
+        
+        logger.info(f"Scraped {len(events)} events from {url}")
+        return events
+        
+    except Exception as e:
+        logger.error(f"Error scraping RSS {url}: {e}")
+        return []
 
-        for entry in feed.entries:
-            title = getattr(entry, "title", "") or ""
-            summary = getattr(entry, "summary", "") or ""
-            link = getattr(entry, "link", "") or ""
 
-            if not link:
-                continue
+def scrape_rss_feed(url):
+    """
+    Alias for scrape_rss for backward compatibility.
+    """
+    return scrape_rss(url)
 
-            if _is_relevant(title) or _is_relevant(summary):
-                results.append({
-                    "source": src["name"],
-                    "title": title.strip(),
-                    "url": link.strip(),
-                    "summary": summary.strip()[:500],
-                })
-    return results
+
+# If you have any other functions, keep them here
+# For example, if you had a different function name:
+def fetch_rss_events(url):
+    """Alternative name for scrape_rss"""
+    return scrape_rss(url)
